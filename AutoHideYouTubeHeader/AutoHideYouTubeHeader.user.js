@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Hide YouTube Header | Keep Search
-// @description  Reclaim header space and reveal a floating search bar on upward scroll, with a full-header toggle.
-// @version      2026.11.15.07
+// @description  Reclaim header space, reveal floating search on upward scroll, and focus native ad skip buttons for Enter or Space.
+// @version      2026.11.15.12
 // @author       ŌKUMA
 // @namespace    https://okuma.dev/
 // @homepageURL  https://github.com/Okumai/UserScripts
@@ -28,6 +28,15 @@
     const LAYOUT_ATTR = 'data-auto-hide-youtube-header-layout';
     const IDLE_ATTR = 'data-auto-hide-youtube-header-idle';
     const IDLE_DELAY = 2000;
+    const AUTO_FOCUS_AD_SKIP = true;
+    const AD_CHECK_INTERVAL = 500;
+    const AD_FOCUS_ATTR = 'data-auto-hide-youtube-header-ad-focus';
+    const focusedAdControls = new Set();
+    let adFocus = null;
+    const AD_SKIP_SELECTOR = [
+        '.ytp-skip-ad-button', '.ytp-ad-skip-button-modern',
+        '.ytp-ad-skip-button', '.ytp-ad-skip-button-v2'
+    ].join(', ');
     const SEARCH_SELECTOR = '.ytSearchboxComponentHost, yt-searchbox, ytd-searchbox';
     const SVG_NS = 'http://www.w3.org/2000/svg';
     const events = new AbortController();
@@ -39,6 +48,7 @@
     const scrollPositions = new WeakMap();
     let frame = null;
     let idleTimer = null;
+    let adTimer = null;
     let destroyed = false;
 
     const style = document.createElement('style');
@@ -125,6 +135,13 @@
         ytd-masthead [${SEARCH_ATTR}] .ytSearchboxComponentInputWrapper,
         ytd-masthead [${SEARCH_ATTR}] #search-form {
             margin-left: 0 !important;
+        }
+        /* Highlight only the actual native button while it owns keyboard focus. */
+        [${AD_FOCUS_ATTR}]:focus {
+            outline: 3px solid #fff !important;
+            outline-offset: 3px !important;
+            box-shadow: 0 0 0 6px #065fd4 !important;
+            opacity: 1 !important;
         }
         #${HOST_ID} {
             display: inline-flex !important;
@@ -227,6 +244,113 @@
         }
     }
 
+    function getAdSkipState(candidate) {
+        const control = candidate.matches('button') ? candidate : candidate.querySelector('button');
+        const player = candidate.closest('#movie_player, .html5-video-player');
+        let reason = '';
+        if (!player) reason = 'No native player';
+        else if (!player.matches('.ad-showing, .ad-interrupting') &&
+            !candidate.closest('.ytp-skip-ad, .ytp-ad-skip-button-container')) reason = 'Not an ad skip control';
+        else if (!(control instanceof HTMLButtonElement)) reason = 'No native button';
+        else if (control.matches(':disabled') ||
+            control.closest('[disabled], [aria-disabled="true"], [aria-hidden="true"], [hidden], [inert]')) {
+            reason = 'Disabled, hidden, or inaccessible';
+        } else {
+            const rect = control.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0 ||
+                rect.right <= 0 || rect.top >= innerHeight || rect.left >= innerWidth) {
+                reason = 'Outside the visible viewport';
+            }
+            for (let node = control; !reason && node; node = node.parentElement) {
+                const computed = getComputedStyle(node);
+                if (computed.display === 'none' || computed.visibility !== 'visible') reason = 'Not visible';
+            }
+        }
+        return { control, reason };
+    }
+
+    function activeElement() {
+        let active = document.activeElement;
+        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        return active;
+    }
+
+    function focusIsProtected() {
+        const active = activeElement();
+        if (active?.isContentEditable || active?.closest(
+            'input, textarea, select, iframe, [role="textbox"], [role="combobox"], [role="searchbox"]'
+        )) return true;
+        // Do not interrupt account menus, dialogs, or another modal interaction.
+        return Array.from(document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"], [role="menu"]'))
+            .some(node => node.getClientRects().length && getComputedStyle(node).visibility === 'visible');
+    }
+
+    function releaseAdFocus() {
+        if (!adFocus) return;
+        const { control, previous } = adFocus;
+        adFocus = null;
+        // Restore only if the user has not already moved focus somewhere else.
+        if (activeElement() === control) {
+            control.blur();
+            if (previous?.isConnected && !previous.closest('[hidden], [inert], [aria-hidden="true"]')) {
+                previous.focus({ preventScroll: true });
+            }
+        }
+    }
+
+    function clearAdFocus() {
+        releaseAdFocus();
+        for (const control of focusedAdControls) control.removeAttribute(AD_FOCUS_ATTR);
+        focusedAdControls.clear();
+    }
+
+    function inspectAdSkip() {
+        return Array.from(document.querySelectorAll(AD_SKIP_SELECTOR), candidate => {
+            const { control, reason } = getAdSkipState(candidate);
+            return {
+                classes: candidate.className, blockedBy: reason || null,
+                focused: Boolean(control && activeElement() === control),
+                alreadyFocusedThisAppearance: focusedAdControls.has(control),
+                focusProtected: focusIsProtected(),
+                pageActive: !document.hidden && document.hasFocus(),
+                shortsExcluded: location.pathname.startsWith('/shorts/'),
+                mode: 'Focus only; press Enter or Space yourself'
+            };
+        });
+    }
+
+    // Focus the real button, then let a physical Enter/Space use its native
+    // activation behavior. Never synthesize clicks, key events, or player calls.
+    function focusAvailableAd() {
+        if (destroyed) return;
+        if (!AUTO_FOCUS_AD_SKIP || location.pathname.startsWith('/shorts/')) {
+            clearAdFocus();
+            return;
+        }
+        const available = new Set(Array.from(document.querySelectorAll(AD_SKIP_SELECTOR))
+            .map(getAdSkipState).filter(state => !state.reason).map(state => state.control));
+        for (const control of focusedAdControls) {
+            if (!available.has(control)) {
+                if (adFocus?.control === control) releaseAdFocus();
+                control.removeAttribute(AD_FOCUS_ATTR);
+                focusedAdControls.delete(control);
+            }
+        }
+        if (document.hidden || !document.hasFocus() || focusIsProtected()) return;
+        for (const control of available) {
+            if (focusedAdControls.has(control)) continue;
+            const previous = activeElement();
+            control.focus({ preventScroll: true });
+            if (activeElement() !== control) continue;
+            releaseAdFocus();
+            adFocus = { control, previous: previous === control ? null : previous };
+            control.setAttribute(AD_FOCUS_ATTR, '');
+            focusedAdControls.add(control);
+            console.info(PREFIX, 'Ad skip button focused. Press Enter or Space to skip.');
+            return;
+        }
+    }
+
     function clearIdle() {
         clearTimeout(idleTimer);
         idleTimer = null;
@@ -296,19 +420,25 @@
         button.addEventListener(name, event => event.stopPropagation(), { signal: events.signal });
     }
 
-    // YouTube replaces header nodes during SPA navigation; no polling needed.
+    // Header mounting is event-driven; only ad button readiness is polled.
     const observer = new MutationObserver(scheduleSync);
     observer.observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener('pointermove', wakeFloating, { passive: true, signal: events.signal });
     document.addEventListener('scroll', onScroll, { capture: true, passive: true, signal: events.signal });
-    document.addEventListener('yt-navigate-start', resetFloating, { signal: events.signal });
+    document.addEventListener('yt-navigate-start', () => {
+        clearAdFocus();
+        resetFloating();
+    }, { signal: events.signal });
     document.addEventListener('yt-navigate-finish', resetFloating, { signal: events.signal });
     document.addEventListener('yt-page-data-updated', scheduleSync, { signal: events.signal });
 
     window.__autoHideYouTubeHeader = {
+        inspectAdSkip,
         destroy() {
             destroyed = true;
             clearIdle();
+            clearInterval(adTimer);
+            clearAdFocus();
             observer.disconnect();
             events.abort();
             if (frame !== null) cancelAnimationFrame(frame);
@@ -327,5 +457,10 @@
 
     refreshButton();
     sync();
-    console.info(PREFIX, 'Started; header hidden by default');
+    if (AUTO_FOCUS_AD_SKIP) {
+        focusAvailableAd();
+        // Also catch CSS-only changes and countdown completion without DOM changes.
+        adTimer = setInterval(focusAvailableAd, AD_CHECK_INTERVAL);
+    }
+    console.info(PREFIX, 'Started; header hidden by default; focus ad skip:', AUTO_FOCUS_AD_SKIP);
 })();
