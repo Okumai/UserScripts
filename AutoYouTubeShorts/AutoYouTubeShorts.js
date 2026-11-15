@@ -1,9 +1,11 @@
 // ==UserScript==
 // @name         Auto YouTube Shorts | Auto-Next with Preload
 // @description  Auto-switch to the next YouTube Short, preload videos, skip ads, and toggle video information with player controls.
-// @version      2026.11.15.01
+// @version      2026.11.15.02
 // @author       ŌKUMA
 // @namespace    https://okuma.dev/
+// @homepageURL  https://github.com/Okumai/UserScripts
+// @supportURL   https://github.com/Okumai/UserScripts/issues
 // @match        https://www.youtube.com/shorts/*
 // @match        https://m.youtube.com/shorts/*
 // @grant        none
