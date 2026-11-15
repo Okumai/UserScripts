@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Hide YouTube Header | Keep Search
 // @description  Reclaim header space, reveal floating search on upward scroll, and focus native ad skip buttons for Enter or Space.
-// @version      2026.11.15.14
+// @version      2026.11.15.16
 // @author       ŌKUMA
 // @namespace    https://okuma.dev/
 // @homepageURL  https://github.com/Okumai/UserScripts
@@ -9,6 +9,7 @@
 // @downloadURL  https://github.com/Okumai/UserScripts/raw/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
 // @updateURL    https://github.com/Okumai/UserScripts/raw/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
 // @match        https://www.youtube.com/*
+// @match        https://m.youtube.com/*
 // @grant        none
 // @license      MIT
 // @run-at       document-end
@@ -50,6 +51,16 @@
     let idleTimer = null;
     let adTimer = null;
     let destroyed = false;
+    let navigating = false;
+
+    // Keep broad @match entries for YouTube SPA navigation from other pages.
+    function isSupportedPage() {
+        const url = new URL(location.href);
+        return !navigating && url.protocol === 'https:' &&
+            ['www.youtube.com', 'm.youtube.com'].includes(url.hostname) &&
+            ((url.pathname === '/watch' && Boolean(url.searchParams.get('v')?.trim())) ||
+                url.pathname.startsWith('/shorts/'));
+    }
 
     const style = document.createElement('style');
     style.id = 'auto-hide-youtube-header-style';
@@ -209,7 +220,8 @@
     function sync() {
         if (destroyed) return;
         if (!style.isConnected) document.documentElement.append(style);
-        const header = document.querySelector('ytd-masthead');
+        const enabled = isSupportedPage();
+        const header = enabled ? document.querySelector('ytd-masthead') : null;
         const center = header?.querySelector('#center.ytd-masthead');
         // Only collapse a supported layout with an actual search box.
         const search = center && Array.from(center.children).find(node => node.matches(SEARCH_SELECTOR));
@@ -230,6 +242,10 @@
         if (!hidden || !floating || !search) clearIdle();
         if (!search) {
             host.remove();
+            if (!enabled) {
+                floating = false;
+                clearAdFocus();
+            }
             return;
         }
         if (!search.hasAttribute(SEARCH_ATTR)) search.setAttribute(SEARCH_ATTR, '');
@@ -313,7 +329,7 @@
                 alreadyFocusedThisAppearance: focusedAdControls.has(control),
                 focusProtected: focusIsProtected(),
                 pageActive: !document.hidden && document.hasFocus(),
-                shortsExcluded: location.pathname.startsWith('/shorts/'),
+                pageExcluded: !isSupportedPage() || location.pathname.startsWith('/shorts/'),
                 mode: 'Focus only; press Enter or Space yourself'
             };
         });
@@ -323,7 +339,7 @@
     // activation behavior. Never synthesize clicks, key events, or player calls.
     function focusAvailableAd() {
         if (destroyed) return;
-        if (!AUTO_FOCUS_AD_SKIP || location.pathname.startsWith('/shorts/')) {
+        if (!AUTO_FOCUS_AD_SKIP || !isSupportedPage() || location.pathname.startsWith('/shorts/')) {
             clearAdFocus();
             return;
         }
@@ -364,10 +380,10 @@
 
     function wakeFloating() {
         clearIdle();
-        if (destroyed || !hidden || !floating || searchHasFocus()) return;
+        if (destroyed || !isSupportedPage() || !hidden || !floating || searchHasFocus()) return;
         idleTimer = setTimeout(() => {
             idleTimer = null;
-            if (!destroyed && hidden && floating && !searchHasFocus()) {
+            if (!destroyed && isSupportedPage() && hidden && floating && !searchHasFocus()) {
                 document.documentElement.setAttribute(IDLE_ATTR, '');
             }
         }, IDLE_DELAY);
@@ -384,7 +400,7 @@
         if (Math.abs(y - previous) < 2) return;
         if (pageScroll) lastScrollY = y;
         else scrollPositions.set(target, y);
-        if (!hidden || (floating && searchHasFocus())) return;
+        if (!isSupportedPage() || !hidden || (floating && searchHasFocus())) return;
         const next = y < previous;
         if (floating !== next) {
             floating = next;
@@ -434,10 +450,18 @@
     document.addEventListener('focusout', () => queueMicrotask(wakeFloating), { signal: events.signal });
     document.addEventListener('scroll', onScroll, { capture: true, passive: true, signal: events.signal });
     document.addEventListener('yt-navigate-start', () => {
+        navigating = true;
         clearAdFocus();
         resetFloating();
     }, { signal: events.signal });
-    document.addEventListener('yt-navigate-finish', resetFloating, { signal: events.signal });
+    function finishNavigation() {
+        navigating = false;
+        resetFloating();
+    }
+    for (const name of ['yt-navigate-finish', 'state-navigateend']) {
+        document.addEventListener(name, finishNavigation, { signal: events.signal });
+    }
+    window.addEventListener('popstate', finishNavigation, { signal: events.signal });
     document.addEventListener('yt-page-data-updated', scheduleSync, { signal: events.signal });
 
     window.__autoHideYouTubeHeader = {
@@ -470,5 +494,5 @@
         // Also catch CSS-only changes and countdown completion without DOM changes.
         adTimer = setInterval(focusAvailableAd, AD_CHECK_INTERVAL);
     }
-    console.info(PREFIX, 'Started; header hidden by default; focus ad skip:', AUTO_FOCUS_AD_SKIP);
+    console.info(PREFIX, 'Started; watch and Shorts pages only; header hidden by default; focus ad skip:', AUTO_FOCUS_AD_SKIP);
 })();
