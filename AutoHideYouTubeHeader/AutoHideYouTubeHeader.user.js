@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Hide YouTube Header | Keep Search
 // @description  Reclaim header space, reveal floating search on upward scroll, and focus native ad skip buttons for Enter or Space.
-// @version      2026.11.15.12
+// @version      2026.11.15.13
 // @author       ŌKUMA
 // @namespace    https://okuma.dev/
 // @homepageURL  https://github.com/Okumai/UserScripts
@@ -357,12 +357,17 @@
         document.documentElement.removeAttribute(IDLE_ATTR);
     }
 
+    function searchHasFocus() {
+        // document.activeElement is the host when the input is inside a shadow root.
+        return Boolean(document.activeElement?.closest(`[${SEARCH_ATTR}]`));
+    }
+
     function wakeFloating() {
         clearIdle();
-        if (destroyed || !hidden || !floating) return;
+        if (destroyed || !hidden || !floating || searchHasFocus()) return;
         idleTimer = setTimeout(() => {
             idleTimer = null;
-            if (!destroyed && hidden && floating) {
+            if (!destroyed && hidden && floating && !searchHasFocus()) {
                 document.documentElement.setAttribute(IDLE_ATTR, '');
             }
         }, IDLE_DELAY);
@@ -379,7 +384,7 @@
         if (Math.abs(y - previous) < 2) return;
         if (pageScroll) lastScrollY = y;
         else scrollPositions.set(target, y);
-        if (!hidden) return;
+        if (!hidden || (floating && searchHasFocus())) return;
         const next = y < previous;
         if (floating !== next) {
             floating = next;
@@ -424,6 +429,9 @@
     const observer = new MutationObserver(scheduleSync);
     observer.observe(document.documentElement, { childList: true, subtree: true });
     document.addEventListener('pointermove', wakeFloating, { passive: true, signal: events.signal });
+    document.addEventListener('focusin', wakeFloating, { signal: events.signal });
+    // Wait until focus has moved before deciding whether to restart the idle timer.
+    document.addEventListener('focusout', () => queueMicrotask(wakeFloating), { signal: events.signal });
     document.addEventListener('scroll', onScroll, { capture: true, passive: true, signal: events.signal });
     document.addEventListener('yt-navigate-start', () => {
         clearAdFocus();
