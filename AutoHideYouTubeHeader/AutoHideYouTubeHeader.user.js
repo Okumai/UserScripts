@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Auto Hide YouTube Header | Keep Search
 // @description  Reclaim header space, reveal floating search on upward scroll, and focus native ad skip buttons for Enter or Space.
-// @version      2026.11.15.13
+// @version      2026.11.15.14
 // @author       ŌKUMA
 // @namespace    https://okuma.dev/
 // @homepageURL  https://github.com/Okumai/UserScripts
 // @supportURL   https://github.com/Okumai/UserScripts/issues
-// @downloadURL  https://raw.githubusercontent.com/Okumai/UserScripts/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
-// @updateURL    https://raw.githubusercontent.com/Okumai/UserScripts/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
+// @downloadURL  https://github.com/Okumai/UserScripts/raw/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
+// @updateURL    https://github.com/Okumai/UserScripts/raw/refs/heads/master/AutoHideYouTubeHeader/AutoHideYouTubeHeader.user.js
 // @match        https://www.youtube.com/*
 // @grant        none
 // @license      MIT
